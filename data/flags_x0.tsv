@@ -406,3 +406,7 @@ sn7reboot	i	1
 salifemc	i	1
 sqdivmute	i	1
 slockbehind	i	1
+sarmband	i	1
+sarmbdia	f	15
+sarmbwid	f	3.5
+sarmbpos	f	11

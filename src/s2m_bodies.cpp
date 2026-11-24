@@ -262,6 +262,9 @@ namespace
         lg::PupPos pos;
         std::vector<Ref> wcomps;
         std::vector<Ref> oldW;
+        std::vector<Ref> arms;
+        Ref armFor;
+        std::string armKey;
         std::optional<std::string> wstr;
         std::optional<std::string> det;
         std::optional<double> spawnAt;
@@ -2991,6 +2994,80 @@ namespace
         if (hasDet) pup_det(P, det);
     }
 
+    bool g_armMiss = false;
+    void arm_free(Body& P)
+    {
+        for (const Ref& c : P.arms)
+            if (valid(c)) Call(c, L"K2_DestroyComponent").o(L"Object", c).run();
+        P.arms.clear();
+        P.armFor.reset();
+        P.armKey.clear();
+    }
+    void pup_arm(Body& P)
+    {
+        if (FL("armband", 1) != 1)
+        {
+            if (!P.arms.empty() || has(P.armFor)) arm_free(P);
+            return;
+        }
+        if (!valid(P.pawn)) return;
+        Ref mesh = pref(P.pawn, "Mesh");
+        if (!valid(mesh)) return;
+        if (!P.armFor.same(P.pawn))
+        {
+            arm_free(P);
+            P.armFor = P.pawn;
+            if (g_armMiss) return;
+            Ref cyl = asset("/Engine/BasicShapes/Cylinder.Cylinder");
+            if (!valid(cyl))
+            {
+                g_armMiss = true;
+                LOG("NOLA armband: /Engine/BasicShapes/Cylinder is not available, armbands are off");
+                return;
+            }
+            static const wchar_t* const kBone[2] = {L"jnt_l_arm", L"jnt_r_arm"};
+            static const float kCol[2][4] = {{0.0f, 0.22f, 1.0f, 1.0f}, {1.0f, 0.78f, 0.0f, 1.0f}};
+            int socks = 0, colored = 0;
+            for (int side = 0; side < 2; side++)
+            {
+                {
+                    Call d(mesh, L"DoesSocketExist");
+                    d.n(L"InSocketName", kBone[side]);
+                    if (d.run() && d.rb()) socks++;
+                }
+                for (int band = 0; band < 2; band++)
+                {
+                    Ref sc = add_comp(P.pawn, L"/Script/Engine.StaticMeshComponent", true);
+                    if (!valid(sc)) continue;
+                    Call(sc, L"SetStaticMesh").o(L"NewMesh", cyl).run();
+                    Call(sc, L"SetCollisionEnabled").i(L"NewType", 0).run();
+                    Call(sc, L"SetCastShadow").b(L"NewCastShadow", false).run();
+                    Call(sc, L"K2_AttachToComponent").o(L"Parent", mesh).n(L"SocketName", kBone[side]).i(L"LocationRule", 2).i(L"RotationRule", 2).i(L"ScaleRule", 2).b(L"bWeldSimulatedBodies", false).run();
+                    Call cm(sc, L"CreateAndSetMaterialInstanceDynamic");
+                    cm.i(L"ElementIndex", 0);
+                    Ref mid = cm.run() ? cm.ro() : Ref{};
+                    if (valid(mid) && Call(mid, L"SetVectorParameterValue").n(L"ParameterName", L"Color").raw(L"Value", kCol[band], 16).run()) colored++;
+                    P.arms.push_back(sc);
+                }
+            }
+            LOG(fmt("NOLA armband: %d parts on the remote player, arm bones found=%d of 2, coloured=%d", (int)P.arms.size(), socks, colored));
+        }
+        if (P.arms.size() != 4) return;
+        double dia = FL("armbdia", 15), wid = FL("armbwid", 3.5), pos = FL("armbpos", 11);
+        std::string key = fmt("%.2f|%.2f|%.2f", dia, wid, pos);
+        if (P.armKey == key) return;
+        P.armKey = key;
+        for (int i = 0; i < 4; i++)
+        {
+            const Ref& sc = P.arms[i];
+            if (!valid(sc)) continue;
+            double sign = i < 2 ? -1.0 : 1.0;
+            double x = sign * (pos + (i % 2) * wid);
+            Call(sc, L"K2_SetRelativeLocationAndRotation").v(L"NewLocation", Vec3{x, 0, 0}).r(L"NewRotation", Rot{90, 0, 0}).b(L"bSweep", false).b(L"bTeleport", true).run();
+            Call(sc, L"SetRelativeScale3D").v(L"NewScale3D", Vec3{dia / 100.0, dia / 100.0, wid / 100.0}).run();
+        }
+    }
+
     void pup_det(Body& P, const std::string& det)
     {
         std::string path = det.empty() ? std::string(lg::kDetDef) : det;
@@ -3407,6 +3484,7 @@ namespace
         }
         vault_lift(P, now);
         pup_weapon(P);
+        pup_arm(P);
     }
 
     int g_hitN = 0;
